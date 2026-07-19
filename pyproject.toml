@@ -1,0 +1,45 @@
+[project]
+name = "cfaios"
+version = "1.0.0"
+description = "Chess Flow AI Operating System — an 18-agent constitutional architecture for verified chess education"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary — Intellectual Property of Chess Flow" }
+
+dependencies = [
+    # Knowledge graph
+    "neo4j>=5.20",
+    # Embedding / vector store (swap for your provider)
+    "numpy>=1.26",
+    # LLM providers
+    "anthropic>=0.40",
+    "google-genai>=0.3",
+    "groq>=0.11",
+    # Chess (Agent 3 verification)
+    "python-chess>=1.999",
+    # Corpus extraction (Agent 1 / Phase 1 probe)
+    "pdfplumber>=0.10",
+    "ebooklib>=0.18",
+    # Config / validation
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cfaios*", "config*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

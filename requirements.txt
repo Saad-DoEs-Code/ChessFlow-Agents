@@ -1,0 +1,42 @@
+# CFAIOS — Chess Flow AI Operating System
+#
+# Quick start:
+#   1. python -m venv .venv && .venv\Scripts\activate   (Windows)
+#   2. pip install -r requirements.txt
+#      (or: pip install -e ".[dev]" — pyproject.toml is the canonical source)
+#   3. copy .env.example .env and fill in your API keys
+#   4. Install Stockfish (not pip-installable): https://stockfishchess.org/download/
+#      and point CFAIOS_STOCKFISH_PATH in .env at the .exe
+#   5. Drop a chess book PDF into data/books/
+#   6. Verify:  set PYTHONPATH=. && python scripts/bootstrap_check.py && pytest -q
+#   7. Run the pipeline:  python scripts/run_truth_slice.py
+#                         python scripts/run_lesson.py --show-provenance
+
+# Knowledge graph driver (Neo4j binding not yet active — local stores used today)
+neo4j>=5.20
+
+# Vector math / embeddings
+numpy>=1.26
+
+# LLM providers (Google = vision board->FEN; Groq = lesson/script generation;
+# Anthropic = wired but awaiting a real key)
+anthropic>=0.40
+google-genai>=0.3
+groq>=0.11
+
+# Chess verification (Agent 3): FEN legality, UCI engine protocol, Syzygy probing
+python-chess>=1.999
+
+# Corpus extraction (Agent 1): PDF text + page rendering, EPUB
+pdfplumber>=0.10
+ebooklib>=0.18
+
+# Config / validation
+pydantic>=2.7
+pydantic-settings>=2.3
+python-dotenv>=1.0
+
+# Dev / test
+pytest>=8
+ruff>=0.5
+mypy>=1.10
