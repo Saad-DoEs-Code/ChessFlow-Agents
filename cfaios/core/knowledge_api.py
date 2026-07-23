@@ -70,6 +70,11 @@ class KnowledgeAPI(ABC):
         empty for bindings without a persistent log; persistent bindings override."""
         return []
 
+    def list_node_ids(self) -> list[str]:
+        """All committed node ids. A read like any other — Agent 15 uses this for
+        staleness scanning (Pattern #19). Default empty; persistent bindings override."""
+        return []
+
     # ---- WRITE PATH (mediated; P4) ----
     @abstractmethod
     def stage_candidate(self, candidate: Candidate) -> str:

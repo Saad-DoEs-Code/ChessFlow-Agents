@@ -76,15 +76,24 @@ Suite after Phase 4: **19 tests passing** (11 + 3 replay + 5 CQI gate), bootstra
 |---|---|---|
 | 6 Assessment | ✅ minimal (2026-07-18) | Diagnostic questions **rendered from verified data, no LLM** (Pattern #4): question = committed FEN + stipulation, answer key = the Agent-3-CONFIRMED `claimed_result` — a hallucinated question/key is structurally impossible. Only confirmed-verdict nodes are assessable; others excluded and reported. Scoring emits `COMPETENCY_UPDATED` events; the **Competency Graph is a projection of those events** (`competency_projection()` rebuilds it from the log — same event-sourcing discipline as 4.1). P0 guard: unanswered questions reported, never scored; accuracy is `None`, never fabricated, at 0 attempts. `scripts/run_assessment.py` proven live: 5 questions from real nodes, demo learner 1 right / 1 wrong / 3 unanswered, graph rebuilt from log. |
 | 8 Content | ✅ minimal (2026-07-18) | Lesson → video script, one scene per lesson section, S0 transformation only (P12 — the LLM prompt forbids adding chess content). **Refuses ungated input** (`ValueError` if the lesson didn't pass CQI — Pattern #2 enforced in code, not convention). PQI gate real: integrity dims `provenance_intact` + `verified_source` at 1.0, quality dims for narration/coverage. Full semantic Claim Faithfulness Score deferred (the faithfulness check today is structural provenance, not NLP comparison). |
-| 10 Visual | ✅ minimal (2026-07-18) | Thumbnail **spec** rendered 100% from committed data — no LLM anywhere in the agent, which is exactly its locked inheritance (Patterns #4/#5): board = the node's FEN verbatim, title from a fixed stipulation-keyed table, "Engine-verified" badge backed by the ledger ref riding on the spec. P0 (false visual claim) structurally impossible. Refuses scripts that didn't pass PQI. Actual image rendering deferred (emits the spec an image pipeline consumes). |
-| 4, 9, 11, 12, 14, 15, 17, 18 | ⬜ | Still `NotImplementedError` scaffolds. |
+| 10 Visual | ✅ minimal (2026-07-18) | Thumbnail **spec** rendered 100% from committed data — no LLM anywhere in the agent, which is exactly its locked inheritance (Patterns #4/#5): board = the node's FEN verbatim, title from a fixed stipulation-keyed table. Refuses scripts that didn't pass PQI. **Now takes Agent 17's canonical brand** (`context["brand"]`) and only shows the "Engine-verified" badge if Agent 17 actually approved it against real evidence — falls back to its own bootstrap default only when no canonical brand exists yet (Pattern #22). Actual image rendering still deferred. |
+| 9 Distribution | ✅ minimal (2026-07-18) | Platform fragments (Twitter/TikTok/Instagram) via **S0 transformation only** (Pattern #11) — mechanical truncation, no LLM, so Validation Conservation (#12) holds by construction, not by checking. Every fragment carries an inline `[Verified — node …]` tag so it can't mislead standing alone out of context (the literal P0). Refuses ungated scripts. Real Audience Inference Risk *scorer* stays deferred; this is the S0-only floor under it. |
+| 11 Lifecycle | ✅ minimal (2026-07-18) | Learner recommendations from fixed, neutral templates — **no LLM generates this copy**, which is the actual P0 guard (dark-pattern language can't appear because nothing capable of inventing it runs). Reads Agent 6's real Competency Graph; Pattern #7 (Respectful Non-Intervention) implemented literally — a learner with nothing to review and nothing new gets **no sequence entry at all**, and at most one unsolicited "next" nudge ever. |
+| 12 Community | ✅ minimal (2026-07-18) | Classifies posts by `EpistemicState` (Pattern #8: status, not suppression) and routes checkable claims into the **same mediated Candidate Queue Agent 1 uses** — a community claim becomes a candidate, never knowledge, until Agent 3 + Agent 2 promote it (P15). Child safety is structurally separated: a flagged post escalates and is **never also** epistemically annotated — the bootstrap heuristic used is explicitly not a real CSL (still deferred). |
+| 14 Business | ✅ minimal (2026-07-18) | Implements Layer 1 of the governance stack (`governance.py`'s `ManipulationIncentiveTest`) for real: `screen_metric()` simulates sole-optimization and flags known manipulative signals. Reads **only** Agent 13's report — no other data source exists in the code path. Illegal metrics never enter the business model; they escalate to Agent 18 (`EscalationKind.MISSION_MONEY`) and Agent 14 never resolves the conflict itself. |
+| 15 Research | ✅ minimal (2026-07-18) | "Discovery creates candidates, verification creates knowledge" implemented literally — findings with a FEN + citation stage into the same queue as Agents 1/12; uncited findings are never staged (evidence_cited integrity dim). Runs a real staleness scan over `list_node_ids()` using each node's actual `KNOWLEDGE_COMMITTED` timestamp from the log (not a guess), emitting real `NODE_MARKED_STALE` events when a node crosses the threshold — proven live with an injected future `now`. |
+| 17 Brand | ✅ minimal (2026-07-18) | Pattern #22 (Bootstrap Resolution) in direct action: canonicalizes Agent 10's provisional brand spec, but only approves the "Engine-verified" promise **after checking it against real committed verdict tiers** — a promise the graph can't back is rejected, not rubber-stamped. Now wired into Agent 10 for real (see above). |
+| 18 Executive | ✅ minimal (2026-07-18) | Reads every `ESCALATION_RAISED` event in the log, groups by kind, and drafts `AMENDMENT_PROPOSED` proposals for real recurring patterns — never a resolution. Every proposal payload hardcodes `requires_human_enactment: True`; the class has no method that could mark anything resolved. Proven live triaging real escalations from Agent 12 (child safety) and Agent 14 (mission money). |
 
-**Live chain proven** (`scripts/run_content.py`): blueprint → CQI-gated lesson → PQI-gated
-script → thumbnail spec, provenance intact end to end — the final thumbnail spec alone
-still names its node_id, evidence_ref, and graph version. And Agent 13's telemetry picked
-up the new `competency_updated` events with **zero code changes** — pure log aggregation.
+**All 18 agents are now implemented — no scaffolds remain.** `scripts/run_full_pipeline.py`
+(new) runs the entire system in one command: Education → Communication (8 gated agents
+in sequence, including the new Agent 17→10 brand handoff) → Intelligence → Governance,
+against the real graph. Live run: every gate passed, a real manipulative metric was
+caught and escalated, a real child-safety flag was caught and escalated, and Agent 18
+drafted 3 real amendment proposals citing the real escalation IDs — nothing invented,
+nothing auto-resolved.
 
-Suite after this slice: **26 tests passing**.
+Suite after this slice: **47 tests passing** (26 + 21 new).
 
 ---
 
@@ -206,20 +215,30 @@ with Safe Halt + escalation, the first gate blocks for real, and telemetry over 
 events is live. New scripts: `replay_events.py`, `run_orchestrated_slice.py`,
 `run_analytics.py`.
 
-## Phase 5 opened (2026-07-18): Agents 6, 8, 10 built minimal and proven live
+## Phase 5 complete (2026-07-18): all 18 agents implemented
 
-The learning loop closed (extract → verify → commit → teach → **assess**) and the
-content chain runs gated end to end (lesson → script → thumbnail spec, provenance
-surviving every hop). New scripts: `run_assessment.py`, `run_content.py`.
+Every agent from the constitution's locked spec now has real, tested AIL logic —
+Truth, Education, Communication, Intelligence, and Governance layers all populated.
+`scripts/run_full_pipeline.py` runs all of them together against the real graph in
+one command.
 
-## Next step: continue Phase 5
+## What's next (all optional hardening/breadth, not core-claim gaps anymore)
 
-Remaining per ROADMAP.md's order: **Distribution (9, 11)** — platform fragments +
-lifecycle, testing P12/P14 — then Community (12), Intelligence (14, 15), Governance
-(17, 18). Agent 4 (Learning Science) is also still a scaffold and would deepen
-Agents 5/6 (Learning DNA, cognitive-load model) when it comes up.
-
-Also still open from earlier phases (unchanged): the full 201-page vision pass,
-Step 1.3's README write-up, real Neo4j (needs Docker or a native install), Syzygy
-tablebases, binding `llm_anthropic.py` (needs a real key), and the corpus-probe
-gibberish heuristic's blindness to letter-substitution OCR noise.
+- **Agent 4 (Learning Science)** is the one locked agent with no implementation at
+  all — it wasn't in ROADMAP.md's explicit Phase 5+ list, but Agents 5/6 currently
+  bootstrap past what it's meant to own (Learning DNA, cognitive-load model,
+  spaced-repetition). Worth circling back to.
+- The full 201-page vision pass (`run_truth_slice.py --vision-limit 0`) still hasn't
+  been run — every result so far uses a capped subset.
+- Step 1.3's README write-up was never formally done.
+- Real Neo4j (needs Docker or a native install — this machine has neither) and
+  Syzygy tablebases remain unbound; `LocalKnowledgeAPI`/`StockfishEngine`'s
+  engine-fallback path cover their absence today.
+- `llm_anthropic.py` still lacks a real key; `llm_groq.py` covers all generation
+  needs in the meantime.
+- The corpus-probe gibberish heuristic is still blind to letter-substitution OCR
+  noise (flagged back in Step 1.1, never revisited).
+- Every gate's *scoring* is a first, mechanical/heuristic pass (documented as such
+  in each agent's docstring) — none claim to be a finished quality model, per the
+  constitution's own Phase-A/Phase-B distinction (P9): these are structural
+  predictions awaiting Agent 13 outcome data to recalibrate against.

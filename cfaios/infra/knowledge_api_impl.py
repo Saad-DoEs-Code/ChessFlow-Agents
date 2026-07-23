@@ -112,6 +112,9 @@ class LocalKnowledgeAPI(KnowledgeAPI):
         with self._events_path.open(encoding="utf-8") as f:
             return [json.loads(line) for line in f if line.strip()]
 
+    def list_node_ids(self) -> list[str]:
+        return list(self._nodes.keys())
+
     # ---- write path (mediated; P4) ----
 
     def stage_candidate(self, candidate: Candidate) -> str:

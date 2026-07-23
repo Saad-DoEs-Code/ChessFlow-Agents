@@ -52,7 +52,11 @@ class VisualAgent(BaseAgent):
 
     Deferred (see README): actual image rendering (this emits the spec an
     image pipeline would consume), Visual Faithfulness Score, Expectation
-    Match, Agent 17 brand integration."""
+    Match. Agent 17 brand integration IS wired: pass its canonical_brand via
+    context["brand"] and this agent uses Agent 17's actual approved/rejected
+    promises to decide whether it may show the "Engine-verified" badge,
+    falling back to the bootstrap default only when no canonical brand has
+    been produced yet (Pattern #22: bootstrap until governed)."""
 
     spec = SPEC
     # TODO(build): define the concrete gate dimensions for Thumbnail Quality Index (TQI).
@@ -69,7 +73,7 @@ class VisualAgent(BaseAgent):
             raise ValueError(
                 "Agent 10: refusing a script that has not passed Agent 8's PQI gate "
                 "(Pattern #2 — no layer consumes unproven output).")
-        return {"script": context["script"]}
+        return {"script": context["script"], "brand": context.get("brand")}
 
     def interpret(self, observation: dict) -> dict:
         """Pick the hero scene: the first scene (already ordered by Agent 5's
@@ -78,18 +82,32 @@ class VisualAgent(BaseAgent):
         if not script["scenes"]:
             raise ValueError("Agent 10: script has no scenes to depict.")
         return {"topic": script["topic"], "hero": script["scenes"][0],
-                "scene_count": len(script["scenes"])}
+                "scene_count": len(script["scenes"]), "brand": observation["brand"]}
 
     def decide(self, interpretation: dict) -> dict:
         hero = interpretation["hero"]
         node = self.api.get_node(hero["node_id"])
         claimed = (node.payload.get("claimed_result") if node else None) or "win"
+
+        canonical = interpretation["brand"]
+        if canonical is not None:
+            # Governed path: only show the badge if Agent 17 actually approved
+            # it against real committed evidence (constitutional reality).
+            brand_dict = {k: v for k, v in canonical.items()
+                         if k in ("palette", "font", "badge_style", "version")}
+            badge = "Engine-verified" if "Engine-verified" in canonical.get("approved_promises", []) else None
+        else:
+            # Bootstrap path (Pattern #22): no canonical brand yet, use the
+            # provisional default — same behavior as before Agent 17 existed.
+            brand_dict = dict(_BRAND)
+            badge = "Engine-verified"
+
         spec = {
             "board_fen": hero["fen"],                      # the committed position, verbatim
             "title": _STIPULATION_TITLES.get(claimed, "Solve this!"),
-            "badge": "Engine-verified",                    # backed by the ledger ref below
+            "badge": badge,
             "subtitle": f"{interpretation['scene_count']}-part lesson",
-            "brand": dict(_BRAND),
+            "brand": brand_dict,
             # provenance rides ON the spec — composition preserves it (Pattern #5)
             "provenance": {"node_id": hero["node_id"], "evidence_ref": hero["evidence_ref"],
                            "graph_version": self.api.current_version()},
