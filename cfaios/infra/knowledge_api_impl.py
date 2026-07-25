@@ -90,13 +90,21 @@ class LocalKnowledgeAPI(KnowledgeAPI):
     def get_node(self, node_id: str, *, version: str | None = None) -> KnowledgeNode | None:
         # Version pinning (courses/videos pin a version) is a deferred concern —
         # this binding only ever holds one current snapshot per node.
+        # A retracted node (see NODE_SUPERSEDED handling in emit()) is excluded
+        # from the CURRENT projection — as far as any reader is concerned, it no
+        # longer exists — but the fact it was ever committed and then retracted
+        # is never erased from events.jsonl (P6: the log forgets nothing, only
+        # the projection built from it can legitimately say "not now").
         raw = self._nodes.get(node_id)
-        return _to_knowledge_node(node_id, raw) if raw else None
+        if not raw or raw.get("retracted"):
+            return None
+        return _to_knowledge_node(node_id, raw)
 
     def semantic_search(self, query: str, *, k: int = 10) -> list[KnowledgeNode]:
         hits = self.vector_store.query(_local_embedding(query), k=k)
         return [_to_knowledge_node(node_id, self._nodes[node_id])
-                for node_id, _score in hits if node_id in self._nodes]
+                for node_id, _score in hits
+                if node_id in self._nodes and not self._nodes[node_id].get("retracted")]
 
     def get_verdict(self, node_id: str) -> Verdict | None:
         raw = self._nodes.get(node_id)
@@ -127,7 +135,25 @@ class LocalKnowledgeAPI(KnowledgeAPI):
             raise SingleWriterViolation(
                 f"actor {event.actor_agent} attempted to emit KNOWLEDGE_COMMITTED; "
                 f"only Agent {AGENT_KNOWLEDGE_WRITER} may (P4).")
+        if event.type is EventType.NODE_SUPERSEDED:
+            self._retract(event.subject_id, reason=event.payload.get("reason", ""),
+                         retracted_by=event.actor_agent, at=event.at.isoformat())
         self._append_event(event)
+
+    def _retract(self, node_id: str, *, reason: str, retracted_by: int, at: str) -> None:
+        """2026-07-26 finding: a node can be committed as CONFIRMED on a
+        misextracted position and still be wrong even after 2-call vision
+        agreement (see PROGRESS.md). NODE_SUPERSEDED existed in the event
+        schema before today but nothing on the read side honored it — this
+        closes that gap. No actor-authorization check is enforced here (unlike
+        P4's strict KNOWLEDGE_COMMITTED gate) — this minimal build accepts a
+        retraction from any actor; real governance over who may retract
+        committed knowledge is a deferred concern, not a solved one."""
+        if node_id in self._nodes:
+            self._nodes[node_id].update(
+                retracted=True, retraction_reason=reason,
+                retracted_by=retracted_by, retracted_at=at)
+            self._save_nodes()
 
     # ---- Agent 2 only ----
 
@@ -202,4 +228,13 @@ def rebuild_nodes_from_events(events: list[dict]) -> tuple[dict[str, dict], list
                 "verdict": p["verdict"],
                 "source_agent": source_agent,
             }
+        elif ev["type"] == EventType.NODE_SUPERSEDED.value:
+            if ev["subject_id"] in nodes:
+                nodes[ev["subject_id"]].update(
+                    retracted=True, retraction_reason=ev["payload"].get("reason", ""),
+                    retracted_by=ev["actor_agent"], retracted_at=ev["at"])
+            else:
+                warnings.append(
+                    f"event {ev['id']}: NODE_SUPERSEDED for {ev['subject_id']!r}, "
+                    f"which was never committed under the current schema")
     return nodes, warnings

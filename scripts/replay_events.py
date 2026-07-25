@@ -36,7 +36,11 @@ def main() -> None:
             missing_from_replay.append(node_id)
             continue
         r = rebuilt[node_id]
-        fields_equal = all(r[k] == snap[k] for k in ("concept", "payload", "graph_version", "verdict"))
+        # "retracted" (Step 2026-07-26) defaults to False on both sides for
+        # nodes that were never superseded, so this check is a no-op for them.
+        _fields = ("concept", "payload", "graph_version", "verdict", "retracted",
+                  "retraction_reason", "retracted_by", "retracted_at")
+        fields_equal = all(r.get(k) == snap.get(k) for k in _fields)
         # source_agent may be None in the rebuild when staging bypassed event
         # emission (pre-schema runs) — count as a soft match but say so.
         if fields_equal:
@@ -44,8 +48,10 @@ def main() -> None:
             if r["source_agent"] != snap.get("source_agent"):
                 print(f"  ~ {node_id}: content matches; source_agent unrecoverable from log "
                       f"(snapshot says {snap.get('source_agent')})")
+            if snap.get("retracted"):
+                print(f"  ~ {node_id}: RETRACTED — {snap.get('retraction_reason')!r}")
         else:
-            diffs = [k for k in ("concept", "payload", "graph_version", "verdict") if r[k] != snap[k]]
+            diffs = [k for k in _fields if r.get(k) != snap.get(k)]
             mismatches.append((node_id, diffs))
 
     print(f"[replay] content matches    : {matches}/{len(current)}")

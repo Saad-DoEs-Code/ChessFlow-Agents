@@ -359,15 +359,120 @@ distribute → govern) now runs on a dataset whose every figure has been
 independently checked, not just trusted because a demo script printed a clean
 summary.
 
+## External review found a real gap in the fix itself (2026-07-26)
+
+A second reader pushed on the "definitive final measurement" report above with
+five specific, falsifiable questions rather than taking it at face value. Two of
+them (temperature/sampling, and whether "PASS" reflected real gate dimensions)
+came back clean. Two did not.
+
+**2-call agreement doesn't fully solve what it was built to solve.** Made a
+third, independent vision call on three pages that had already passed 2-call
+agreement and gotten committed: p.14 and p.16 held up; **p.101 did not** — the
+third call returned a different, also-wrong reading. Investigated p.101
+directly rather than trusting either AI reading: rendered the actual page,
+read it myself, and cross-validated the result against the book's own stated
+solution moves (`1 Ba6 Na3+`, both legal from the position I read — the
+strongest kind of confirmation available without a second human). The true
+position is:
+
+```
+8/1B1p4/8/1n1N1N2/8/8/6n1/1K1k4 w - - 0 1
+```
+
+**Both** the originally-committed FEN and the third independent call misread
+it, in different ways (rank-shifted; and a hallucinated extra knight, respectively).
+The committed node's CONFIRMED verdict (+2.78 at depth 12) was evaluating the
+*wrong* position — coincidentally crossing the decisive threshold on data that
+wasn't real. This is a second instance of the exact P0 failure mode (evidence-
+free knowledge presented as verified) that the whole 2026-07-23 audit was
+trying to close, and it slipped past that audit's own fix.
+
+**A second, independent problem stacked underneath it.** Evaluated the
+*correct* position with Stockfish directly: depth 12 → +2.09, depth 20 → +1.96,
+depth 30 → +1.92. Even on the true position, searched deeper than the router
+ever goes, the engine never crosses the 2.5-pawn decisive threshold — because
+this study's actual point is a forced mate-in-9 with four knights, and a
+long forcing sequence with roughly balanced material doesn't show up as a
+large centipawn score to a general-purpose search, no matter the depth. **Had
+extraction been perfect, the current router would have called this
+INCONCLUSIVE, not CONFIRMED.** The node only looked verified because two
+unrelated failures (wrong position, threshold blind to deep forced sequences)
+happened to point the same direction.
+
+**Fixed the mechanism that was missing, not just the one node.** Checked
+whether the codebase could even retract a wrongly-committed node — it could
+not. `NODE_SUPERSEDED` existed as an event type; nothing on the read side
+honored it. `get_node`/`semantic_search` returned a "retracted" node exactly
+like any other. Fixed: `LocalKnowledgeAPI.emit()` now handles `NODE_SUPERSEDED`
+by marking the node retracted (excluded from `get_node`/`semantic_search`
+going forward); `rebuild_nodes_from_events` replays retraction state
+correctly (verified: `replay_events.py` still shows 8/8 matches, including the
+retraction fields, after retracting); the original commit is **never removed**
+from `events.jsonl` (P6 — the log forgets nothing; only the current-state
+*projection* can legitimately say "not now"). 5 new tests
+(`tests/test_node_retraction.py`). `scripts/retract_node.py` (new, general-
+purpose) was used to actually retract `node-7031e8ab73e8` with the full
+reasoning above as its recorded reason. Re-ran the full pipeline afterward:
+still works, now correctly sees 7 nodes instead of 8.
+
+**Also corrected, not just re-confirmed:** the "8 committed nodes" figure in
+the section above was itself imprecise — pulling the real payloads showed p.14
+and p.16 were each committed *twice* by independent runs (the same
+de-duplication gap already on record, now with a concrete example). The true
+distinct-study count was 6 before this section, **5 now** that p.101 is
+retracted.
+
+**Open, unresolved:** whether a mate-search-aware verification tier is
+practical at all. Tested `chess.engine.Limit(mate=12)` (a dedicated
+forced-mate search, as opposed to plain depth-limited evaluation) directly on
+p.101's true position — it ran for an extended period without returning,
+which is itself the finding: an unbounded mate search is not obviously a
+viable *inline* addition to a router that needs to clear routine claims
+quickly. A time-bounded version (`Limit(mate=N, time=T)`) might be worth
+prototyping, but "brilliant" composed studies whose entire point is a long,
+materially-balanced forcing sequence may be a category the current
+centipawn-threshold approach genuinely cannot confirm reliably — a real
+finding about the verification strategy's limits, not a bug to patch away.
+
+**Unit economics, precisely measured (not estimated):** one real vision call
+costs **1,277 tokens** (1,094 input — 1,066 of that the image — + 183 output).
+At 2 calls/page, the full 201-page run cost **~513K tokens** in vision calls
+alone. No dollar figure is asserted here — current Gemini pricing wasn't
+verified — but at ~7% raw yield and a demonstrated non-trivial rate of
+2-call-agreement still being wrong, the *effective* reliable-node yield is
+lower than 7%, and scaling this approach to "150+ books" is a real strategy
+question, not a hypothetical one.
+
 ## What's next
 
+- **2-call vision agreement is meaningfully better than 1-call but not a solved
+  problem** — spot-checking found a real false-positive it let through (node
+  p.101, now retracted). Worth deciding: accept some residual error rate as the
+  honest cost of a demo-scale system, move to 3-call majority vote (more cost,
+  probably not a full fix either — worth testing before assuming it helps),
+  or change extraction strategy entirely (cropped diagram regions instead of
+  full pages, a different/larger vision model).
+- **The 2.5-pawn decisive threshold may be structurally blind to genuine "brilliant"
+  studies** — a real one (p.101, correct position) never crossed it even at
+  depth 30, because the point was a long forced mate, not material advantage.
+  Worth deciding whether this is an acceptable limitation (INCONCLUSIVE is the
+  safe failure mode, never a wrong CONFIRMED) or worth a bounded mate-search
+  tier — untested whether a *time-bounded* mate search would be fast enough to
+  use inline; the unbounded version tried here did not return in a practical
+  timeframe.
 - **Vision yield is now measured, not just suspected** — 7% (15/201) across the
-  whole book, confirmed consistent with four independent partial-corpus samples.
-  The standing decision: accept ~3-6 confirmed nodes per 100 pages as the honest
+  whole book, confirmed consistent with four independent partial-corpus samples,
+  though the true *reliable* yield is somewhat lower per the finding above. The
+  standing decision: accept ~3-6 confirmed nodes per 100 pages as the honest
   cost of correctness, or invest in a better extraction strategy (different model,
   cropped/zoomed diagram regions instead of full pages, majority-vote across 3
   calls instead of 2-of-2 exact match). Not urgent — the pipeline works correctly
   at this yield, it's just slow to accumulate a large graph.
+- **No governance/authorization exists yet for who may retract a committed
+  node** — `LocalKnowledgeAPI._retract()` accepts a `NODE_SUPERSEDED` event from
+  any actor, unlike `KNOWLEDGE_COMMITTED`'s strict P4 gate. Fine for a
+  single-operator demo; a real deployment needs this decided.
 - **Synthesized-canonical de-duplication** (already an Agent 1 deferred item) is
   now visibly needed: two independent runs both hit pages 14 and 16 and each
   committed a separate node for the same study, rather than recognizing the
