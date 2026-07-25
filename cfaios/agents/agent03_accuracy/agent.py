@@ -159,10 +159,23 @@ class AccuracyAgent(BaseAgent):
                     "check": "tablebase", "raw_result": tb,
                     "note": f"Syzygy tablebase says {tb} for the side to move; claim was {claimed}."}
 
-        # Engine fallback: shallow first, escalate to deep only if ambiguous.
+        # Engine fallback: shallow first, escalate to deep if ambiguous OR if
+        # shallow would REFUTE the claim. The two escalation triggers are not
+        # symmetric on purpose: a composed study's whole point is often
+        # invisible to a shallow search (that is what makes it "brilliant"),
+        # so a shallow read that already agrees with the claim needs no more
+        # compute — but a shallow read that CONTRADICTS the claim gets the
+        # deeper look before this agent asserts "the book is wrong." Finding,
+        # 2026-07-23: at real scale, several REFUTED verdicts turned out to be
+        # near-zero/borderline shallow reads (composed-study signature) rather
+        # than decisive ones — see PROGRESS.md. Wrongly refuting a true claim
+        # permanently drops it from the pipeline (same severity, mirrored, as
+        # False-Confirmed) unless someone manually revisits it, so the extra
+        # depth is worth the cost here specifically.
+        depths = ((self.SHALLOW_DEPTH, EvidenceTier.ENGINE_SHALLOW),
+                  (self.DEEP_DEPTH, EvidenceTier.ENGINE_DEEP))
         last_score, last_depth = None, None
-        for depth, tier in ((self.SHALLOW_DEPTH, EvidenceTier.ENGINE_SHALLOW),
-                             (self.DEEP_DEPTH, EvidenceTier.ENGINE_DEEP)):
+        for i, (depth, tier) in enumerate(depths):
             try:
                 white_score = self.engine.evaluate(fen, depth=depth)
             except RuntimeError as exc:
@@ -173,12 +186,15 @@ class AccuracyAgent(BaseAgent):
             side_relative = white_score if _side_to_move(fen) == "white" else -white_score
             last_score, last_depth = side_relative, depth
             engine_result = self._classify_score(side_relative)
-            if engine_result is not None:
-                state = VerdictState.CONFIRMED if engine_result == claimed else VerdictState.REFUTED
-                return {**base, "state": state, "tier": tier, "check": f"engine_depth_{depth}",
-                        "raw_result": {"score_pawns": side_relative, "depth": depth},
-                        "note": f"Engine (depth {depth}) evaluates {side_relative:+.2f} for the "
-                                f"side to move -> {engine_result}; claim was {claimed}."}
+            if engine_result is None:
+                continue  # ambiguous — escalate depth as before
+            if engine_result != claimed and i < len(depths) - 1:
+                continue  # shallow refutation — confirm at deeper search before asserting it
+            state = VerdictState.CONFIRMED if engine_result == claimed else VerdictState.REFUTED
+            return {**base, "state": state, "tier": tier, "check": f"engine_depth_{depth}",
+                    "raw_result": {"score_pawns": side_relative, "depth": depth},
+                    "note": f"Engine (depth {depth}) evaluates {side_relative:+.2f} for the "
+                            f"side to move -> {engine_result}; claim was {claimed}."}
 
         return {**base, "state": VerdictState.INCONCLUSIVE, "tier": EvidenceTier.ENGINE_DEEP,
                 "check": "engine_ambiguous",

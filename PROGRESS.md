@@ -21,7 +21,7 @@ Legend: ✅ done & verified · ⚠️ partial / skipped intentionally · ⬜ not
 | Step | Status | Notes |
 |---|---|---|
 | 1.1 Corpus probe | ✅ (with a caveat) | `scripts/corpus_probe.py` classified the one book (`200 Brilliant Endgames (gnv64).pdf`, 236pp) as **CLEAN** (0.04% gibberish). **Caveat on record:** the heuristic misses letter-substitution OCR noise ("Alekhhw" for Alekhine, etc.) visible in the sample paragraphs — don't fully trust the CLEAN label without spot-checking. |
-| 1.2 Board-diagram → FEN spike | ✅ resolved 2026-07-18 | Root cause of the earlier 0/5 found: `gemini-2.0-flash`'s free tier is `limit: 0` for this Google project specifically (confirmed by testing `gemini-2.0-flash-lite` too — also `limit: 0`; `gemini-2.5-flash-lite` — `404`, retired for new users). `gemini-3.1-flash-lite` has real free quota and works. Groq was checked as an alternative first (`client.models.list()`) — no vision-capable model available on this key (text/audio only: Llama, GPT-OSS, Whisper, Orpheus). Real 5-sample run against `gemini-3.1-flash-lite`: **3/5 (60%) hit rate — "ACCEPTABLE"**. `config/settings.py`, `.env`, `.env.example` default `google_model` updated to `gemini-3.1-flash-lite`. |
+| 1.2 Board-diagram → FEN spike | ⚠️ **revised down 2026-07-23 — see finding below** | Quota root cause fixed 2026-07-18 (`gemini-2.0-flash` had `limit: 0`; `gemini-3.1-flash-lite` works). Initial "60%" / "45%" hit-rate numbers were real but **measured the wrong thing** — see "Vision correctness finding" below. Corrected, honest yield is far lower. `config/settings.py`, `.env`, `.env.example` default `google_model` = `gemini-3.1-flash-lite`. |
 | 1.3 Lock the extraction strategy | ⬜ | Never formally done — Agent 1's README was not updated with a documented per-file-type strategy. |
 
 ## Phase 2 — The Truth vertical slice (Agents 1 → 3 → 2)
@@ -222,14 +222,160 @@ Truth, Education, Communication, Intelligence, and Governance layers all populat
 `scripts/run_full_pipeline.py` runs all of them together against the real graph in
 one command.
 
-## What's next (all optional hardening/breadth, not core-claim gaps anymore)
+## Finding (2026-07-23): vision "hit rate" was measuring the wrong thing
 
+Full pipeline analysis pass: cleared `.cfaios_data/` (mixed demo+real data from
+earlier sessions) and re-ran `run_truth_slice.py --vision-limit 40` clean, to get
+an honest, uncluttered read on the whole system. Verdicts: 6 confirmed, **10
+refuted** — a much higher refutation rate than earlier small samples suggested.
+
+Investigated rather than accepted. Traced one refuted case (p.12, claimed "draw",
+Stockfish scored the extracted position at **-5.70**, decisively contradicting it)
+back through the event log to its page number, rendered the actual page image,
+and called Gemini vision **three times on the identical image**. Got **three
+different piece placements** on the contested rank each time — one attempt even
+hallucinated an extra pawn. Every one of the three was independently a legal
+chess position. **This is the actual root cause**: `chess.Board(fen).is_valid()`
+can only confirm a position is *coherent*, never that it matches the diagram it
+was supposedly read from. Every "hit rate" reported in this file before today —
+"3/5 (60%)" in Phase 1.2, "45%" in Phase 2.4 — measured legality, not fidelity.
+Both were real numbers, honestly reported, and both were the wrong metric.
+
+**Fixed** (`cfaios/agents/agent01_extraction/agent.py`, `_attach_fens`): every
+page now gets two independent vision calls, accepted only on **exact placement
+agreement**. Disagreement is common, not rare — it degrades to `fen: None` with
+a `vision: inconsistent across 2 attempts` note, same as any other extraction
+failure (P3: report unknown, never guess).
+
+**Re-ran the identical 40-page slice with the fix**, clean graph:
+
+| | before (legality only) | after (2-call agreement) |
+|---|---|---|
+| vision hits | 17/40 (42%) | **3/40 (8%)** |
+| confirmed | 6 | 1 |
+| refuted | 10 | 2 |
+
+The corrected, honest yield of this vision pipeline on this corpus is **roughly
+2-3% net confirmed-per-page-attempted** — an order of magnitude below what was
+previously documented. This is now running a **100-page batch** in the background
+(`run_truth_slice.py --vision-limit 100`) to get a statistically credible dataset
+for analyzing the rest of the pipeline (results to follow in this file).
+
+**Why this matters beyond the number itself:** the fix is a real, structural
+improvement (P3 — never commit an unverifiable extraction), but it also means the
+practical throughput of "book → verified knowledge" via this vision approach is
+much lower than assumed. Getting meaningful graph coverage from a full book this
+way means either accepting a low yield-per-page-of-API-cost, or a better vision
+model/prompting strategy is a real, not cosmetic, next investment — not a
+"nice to have" deferred item.
+
+## Two more findings from the same audit pass (2026-07-23)
+
+**Agent 3's shallow-refutation asymmetry.** Investigating the high refuted count
+above also surfaced a design gap: the router escalated an *ambiguous* shallow read
+to depth 20, but a *decisive-and-wrong* shallow read (REFUTED) was finalized
+immediately, never double-checked. Composed studies are specifically designed to
+be hard for a quick look — that is what makes them "brilliant" — so a shallow
+misjudgment in the wrong direction was structurally more likely than a shallow
+misjudgment in the ambiguous middle. **Fixed** (`agent03_accuracy/agent.py`): a
+shallow REFUTED now escalates to depth 20 before being finalized; a shallow
+CONFIRMED still returns immediately (no reason to spend more compute confirming
+agreement). Proven on real data from the 100-page run above: page 14's study was
+initially refuted at depth 12 (looked lost) and **rescued to CONFIRMED at depth 20**
+once the deeper search found the actual point of the composition. 11 new unit
+tests (`tests/test_agent03_router.py`) cover the full router with a fake,
+deterministic engine — this agent had zero dedicated tests before today despite
+being load-bearing since Step 2.2; only ever validated via live Stockfish runs.
+
+**Agent 1's side-to-move assumption.** `chess.Board()` silently defaults to
+White-to-move when given a bare piece-placement FEN — it never raises, it just
+guesses. Every extracted FEN was stored and validated this way. Checked directly:
+all 201 detected stipulations in this book say "White to play" (verified via a
+direct regex sweep), so the assumption was harmless *for this corpus* — but it was
+a latent bug: a future book with "Black to play" studies would have had every such
+position silently evaluated from the wrong side, and nothing would have signaled
+the error (a wrong-side evaluation is still a "legal" one). **Fixed**: Agent 1 now
+captures the actual side from each study's stipulation (`side_char`) and stores
+the FULL fen (with correct side-to-move) rather than a bare placement — validated
+and used correctly by every downstream reader without any changes needed there,
+since `chess.Board()` already respects an explicit side field. 13 tests now cover
+Agent 1's vision path end-to-end (`tests/test_agent01_vision.py`), including one
+proving a "Black to play" position is stored and validated correctly.
+
+**Test-coverage audit:** while investigating, checked which of the 18 agents had
+zero dedicated unit tests despite being implemented — found Agent 1, Agent 3,
+Agent 5, Agent 13, and Agent 16 all had none (only ever validated via live scripts,
+which is exactly how both real bugs above went unnoticed). Closed all five gaps:
+13 new tests for Agent 1, 11 for Agent 3, 5 for Agent 5, 5 for Agent 13, 4 for
+Agent 16 — **38 new tests total**, suite now at 84 (was 47 at the end of Phase 5).
+Zero further bugs found in Agents 5/13/16 — their logic held up under direct
+testing, unlike 1 and 3.
+
+## The definitive final measurement (2026-07-25)
+
+With both fixes in place, ran the **entire 201-page corpus** for the first time
+(`run_truth_slice.py --vision-limit 0`, no cap):
+
+| | |
+|---|---|
+| candidates extracted | 201 |
+| vision attempted | **201 (the whole book)** |
+| vision hits (2-call agreement) | 15 (**7%**) |
+| confirmed | 6 |
+| refuted | 8 |
+| inconclusive | 1 |
+| **committed to the graph** | **6** |
+
+Consistent with the smaller samples (3%, 8%, 9%, 3% across four independent
+partial runs) — **the honest, stable yield of this vision pipeline on this
+corpus is ~3-9% two-call-agreement hit rate, netting roughly 3-6 confirmed nodes
+per 100 pages attempted.** This is roughly 10-20x lower than the original,
+uncorrected "45-60%" figures — that gap is the whole story of this audit.
+
+Combined with two earlier partial runs (before the final full pass), the graph
+now holds **8 committed nodes total** (p.14 and p.16 appear twice — independent
+runs re-attempted the same early pages and both independently got a hit;
+synthesized-canonical de-duplication is an already-documented deferred item,
+consistent with prior notes, not a new problem).
+
+**Event log replay proves perfect at this scale**: `replay_events.py` rebuilt
+all 8 nodes from the 821-event log with **zero warnings and 8/8 content matches**
+— P6 (the log is authoritative) holds under real, non-trivial load, not just the
+small examples from Step 4.1.
+
+**Full pipeline re-run against the final dataset** (`run_full_pipeline.py --k 6`):
+every gate passed (CQI, PQI, BCI, SII, LII, Epistemic Moderation, BII, RII, EII —
+9/9), a real child-safety escalation and a real manipulative-metric escalation
+were both caught and correctly routed to Agent 18, which drafted amendment
+proposals without resolving anything itself. `run_analytics.py`'s final telemetry:
+821 events, 402 candidates staged, 402 verified, 8 confirmed, 8 committed
+(confirmation_rate 1.99% of ALL candidates — most never had vision attempted at
+all, a different, lower denominator than the 7% vision-specific hit rate above).
+
+**Suite: 84/84 tests passing. Bootstrap clean. This is the "desired final
+result"**: not a bigger number than before, but an honestly, rigorously measured
+one — the whole truth chain (extract → verify → commit → teach → assess →
+distribute → govern) now runs on a dataset whose every figure has been
+independently checked, not just trusted because a demo script printed a clean
+summary.
+
+## What's next
+
+- **Vision yield is now measured, not just suspected** — 7% (15/201) across the
+  whole book, confirmed consistent with four independent partial-corpus samples.
+  The standing decision: accept ~3-6 confirmed nodes per 100 pages as the honest
+  cost of correctness, or invest in a better extraction strategy (different model,
+  cropped/zoomed diagram regions instead of full pages, majority-vote across 3
+  calls instead of 2-of-2 exact match). Not urgent — the pipeline works correctly
+  at this yield, it's just slow to accumulate a large graph.
+- **Synthesized-canonical de-duplication** (already an Agent 1 deferred item) is
+  now visibly needed: two independent runs both hit pages 14 and 16 and each
+  committed a separate node for the same study, rather than recognizing the
+  duplicate. Was already known to be missing; now there's a concrete real example.
 - **Agent 4 (Learning Science)** is the one locked agent with no implementation at
   all — it wasn't in ROADMAP.md's explicit Phase 5+ list, but Agents 5/6 currently
   bootstrap past what it's meant to own (Learning DNA, cognitive-load model,
   spaced-repetition). Worth circling back to.
-- The full 201-page vision pass (`run_truth_slice.py --vision-limit 0`) still hasn't
-  been run — every result so far uses a capped subset.
 - Step 1.3's README write-up was never formally done.
 - Real Neo4j (needs Docker or a native install — this machine has neither) and
   Syzygy tablebases remain unbound; `LocalKnowledgeAPI`/`StockfishEngine`'s

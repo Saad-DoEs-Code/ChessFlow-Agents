@@ -43,10 +43,46 @@ position — P3). Real measured hit rate on this corpus: **60%** (3/5 sample). V
 failures degrade gracefully per-page; one bad call never aborts the whole extraction.
 
 **Not yet done:** heterogeneous-corpus triage (this is tuned to one book's exact
-formatting, not EPUB/other layouts), and mapping the `stipulation` string to Agent
-3's `claimed_result` vocabulary (`"win"`/`"draw"`/`"loss"` — the stipulation regex
-also matches `"mate"`/`"lose"`, not yet normalized) — needed before Step 2.4 can run
-the real 201 candidates through Agent 3 end-to-end.
+formatting, not EPUB/other layouts).
+
+## Finding (2026-07-23): legality is not correctness — fixed with a consistency check
+
+Running the truth slice at real scale (40 pages) surfaced a real problem: the
+book's actual REFUTED rate looked suspiciously high (10 of 17 vision hits). Traced
+one case (p.12) back to its evidence: Stockfish scored the extracted position at
+**-5.70**, decisively contradicting the book's claimed draw. Rendered the actual
+page and called Gemini vision **three times on the identical image** — it returned
+**three different piece placements** on the contested rank each time, one attempt
+even hallucinating an extra pawn. Every one of the three was independently a
+*legal* chess position. **A single legal FEN was never evidence of a correct FEN**
+— python-chess's legality check has no way to know whether a position matches the
+diagram it was supposedly read from, only whether it's a coherent chess position at
+all. That gap had been invisible until real scale (and a page-by-page audit) exposed
+it: the earlier 45-60% "hit rate" numbers from Phase 1.2 only ever measured
+legality, never diagram-fidelity.
+
+Fixed in `_attach_fens`: every page now gets **two independent vision calls**,
+accepted only on **exact placement agreement**. Disagreement — which is common,
+not rare — degrades to `fen: None` with a `vision: inconsistent across 2 attempts`
+note, exactly like any other extraction failure (P3: report unknown, never guess).
+This roughly doubles vision API cost and latency per page but directly targets the
+P0 failure mode (fabricated/misattributed extraction presented as real). Corrected,
+honest yield on this corpus: roughly 3-9% net two-call-agreement hit rate across
+several real runs — see PROGRESS.md for the exact before/after numbers.
+
+## Second finding, same audit (2026-07-23): side-to-move was silently assumed
+
+`chess.Board()` defaults to White-to-move when given a bare piece-placement
+string — no error, just a guess. Every extracted FEN was stored and validated
+this way. Checked directly whether that's actually safe for this book: swept all
+201 detected stipulations, and **100% say "White to play"** — so the assumption
+was harmless here, but it was a latent bug for any future corpus with "Black to
+play" studies (a real, common composition convention this book just doesn't use).
+**Fixed**: `interpret()` now captures the stipulation's actual side (`side_char`),
+and `_attach_fens` validates against it and stores the FULL fen (with the correct
+side field) instead of a bare placement. Nothing downstream needed to change —
+`chess.Board()` already respects an explicit side field correctly; the bug was
+only ever in what Agent 1 handed it.
 
 ---
 *Scaffold generated from `cfaios/agents_spec.py`. Fill in `agent.py`; keep the SPEC in sync

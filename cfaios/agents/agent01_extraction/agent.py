@@ -78,10 +78,18 @@ def _parse_fen(raw: str) -> str | None:
     return line if line.count("/") == 7 else None
 
 
-def _is_legal_placement(placement: str) -> bool:
+def _is_legal_placement(placement: str, side_char: str = "w") -> bool:
+    """Finding, 2026-07-23: `chess.Board()` silently defaults to White-to-move
+    when given a bare piece-placement string — it never raises, it just
+    guesses. This corpus happens to be 100% "White to play" (verified against
+    all 201 detected stipulations), so the old hardcoded " w " was harmless
+    HERE, but it was a latent bug: a future corpus with "Black to play"
+    studies would have every such position silently evaluated from the wrong
+    side. `side_char` is now threaded through from the actual stipulation
+    (see interpret()) instead of assumed."""
     import chess
     try:
-        return chess.Board(f"{placement} w - - 0 1").is_valid()
+        return chess.Board(f"{placement} {side_char} - - 0 1").is_valid()
     except ValueError:
         return False
 
@@ -91,6 +99,20 @@ def _render_page_png(page) -> bytes:
     buf = io.BytesIO()
     page.to_image(resolution=_VISION_RENDER_DPI).original.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _resolve_two_attempts(first: str | None, first_note: str,
+                          second: str | None, second_note: str) -> tuple[str | None, str]:
+    """Pure decision logic, separated from the I/O (vision calls, PDF rendering)
+    so it's testable without a real vision client or book — see
+    _extract_fen_attempt for what produces each (placement_or_None, note) pair."""
+    if first is not None and first == second:
+        return first, "vision: hit (2/2 attempts agreed)"
+    if first or second:
+        return None, (f"vision: inconsistent across 2 attempts "
+                      f"({first or first_note} vs {second or second_note}) — "
+                      f"not committed without agreement")
+    return None, f"vision: both attempts failed ({first_note}; {second_note})"
 
 
 class ExtractionAgent(BaseAgent):
@@ -160,6 +182,9 @@ class ExtractionAgent(BaseAgent):
                 "study_number": study_number,
                 "stipulation": f"{stip_m.group(1).title()} to play and {stip_m.group(2).lower()}",
                 "claimed_result": _OUTCOME_TO_CLAIMED_RESULT[stip_m.group(2).lower()],
+                # the side the stipulation actually names — never assumed (see
+                # _is_legal_placement's docstring for why this matters)
+                "side_char": stip_m.group(1)[0].lower(),
                 "source_label": f"{author_m.group(1)}, {author_m.group(2)}" if author_m else None,
                 "raw_text": text.strip(),
             })
@@ -184,31 +209,53 @@ class ExtractionAgent(BaseAgent):
         return {"book_name": interpretation["book_name"], "book_path": interpretation["book_path"],
                 "candidates": concepts}
 
+    def _extract_fen_attempt(self, png: bytes, side_char: str = "w") -> tuple[str | None, str]:
+        """One vision call + parse + legality check, validated against the
+        side the study's own stipulation names. NOT the full acceptance
+        decision — see _attach_fens for why a single legal-looking attempt is
+        not treated as sufficient."""
+        raw = self.vision_client.vision_to_fen(png)
+        placement = _parse_fen(raw)
+        if placement is None:
+            return None, f"unparseable response {raw[:60]!r}"
+        if not _is_legal_placement(placement, side_char):
+            return None, f"illegal position {placement!r}"
+        return placement, "ok"
+
     def _attach_fens(self, book_path: str, concepts: list[dict],
                       limit: int | None, delay: float) -> list[dict]:
+        """Two independent vision calls per page, accepted ONLY on exact
+        agreement. Discovered empirically (not theoretically): a single
+        "legal FEN" is not evidence of a CORRECT FEN — repeated calls on the
+        identical image can each return a different, individually-legal
+        position (verified directly: 3 calls on the same page produced 3
+        different piece placements on the contested rank, one even
+        hallucinating an extra pawn). Legality is necessary, not sufficient.
+        Committing on single-call legality would let Agent 3 verify a
+        position that isn't the one in the book — evidence-free knowledge by
+        a different name (P0: Fabricated node presented as extracted). Two-
+        call exact agreement is cheap insurance against that: an inconsistent
+        page is reported, not guessed at (P3)."""
         import pdfplumber
 
         targets = concepts if limit is None else concepts[:limit]
-        target_pages = {c["page"] for c in targets}
-
         fen_by_page: dict[int, str | None] = {}
         note_by_page: dict[int, str] = {}
         with pdfplumber.open(book_path) as pdf:
             for i, c in enumerate(targets):
                 page_num = c["page"]
+                side_char = c.get("side_char", "w")
                 try:
                     png = _render_page_png(pdf.pages[page_num - 1])
-                    raw = self.vision_client.vision_to_fen(png)
-                    placement = _parse_fen(raw)
-                    if placement is None:
-                        fen_by_page[page_num] = None
-                        note_by_page[page_num] = f"vision: unparseable response {raw[:60]!r}"
-                    elif not _is_legal_placement(placement):
-                        fen_by_page[page_num] = None
-                        note_by_page[page_num] = f"vision: illegal position {placement!r}"
-                    else:
-                        fen_by_page[page_num] = placement
-                        note_by_page[page_num] = "vision: hit"
+                    first, first_note = self._extract_fen_attempt(png, side_char)
+                    if delay:
+                        time.sleep(delay)
+                    second, second_note = self._extract_fen_attempt(png, side_char)
+                    placement, note_by_page[page_num] = _resolve_two_attempts(
+                        first, first_note, second, second_note)
+                    # Store the FULL fen (correct side-to-move included) — never
+                    # let a downstream reader silently default to White again.
+                    fen_by_page[page_num] = f"{placement} {side_char} - - 0 1" if placement else None
                 except Exception as exc:  # a bad page/API error must not kill the run
                     fen_by_page[page_num] = None
                     note_by_page[page_num] = f"vision: error {exc}"
